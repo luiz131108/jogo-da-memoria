@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Jogo da Memória — Match Uchiha</title>
+  <style>
+    :root{--bg:#0b1220;--card:#0f1724;--accent:#9b1d1d;--muted:#9fb0c8}
+    *{box-sizing:border-box}
+    body{margin:0;font-family:Inter,Segoe UI,Roboto,Arial,sans-serif;background:linear-gradient(180deg,#071021,#071427);color:#e6eef6;display:flex;min-height:100vh;align-items:center;justify-content:center}
+    .wrap{width:100%;max-width:920px;padding:20px}
+    header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+    h1{margin:0;font-size:20px}
+    .controls{display:flex;gap:8px;align-items:center}
+    .btn{background:transparent;border:1px solid rgba(255,255,255,0.06);padding:8px 12px;border-radius:8px;color:inherit;cursor:pointer}
+    .btn.primary{background:var(--accent);border:none;color:white}
+
+    .board{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;background:transparent}
+    .card{position:relative;aspect-ratio:3/4;border-radius:10px;perspective:800px}
+    .inner{position:absolute;inset:0;transition:transform .45s;transform-style:preserve-3d;cursor:pointer}
+    .card.flipped .inner{transform:rotateY(180deg)}
+    .face{position:absolute;inset:0;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:34px;backface-visibility:hidden}
+    .front{background:linear-gradient(180deg,#0f1724,#0b1220);border:1px solid rgba(255,255,255,0.04)}
+    .back{transform:rotateY(180deg);background:linear-gradient(180deg,#13202b,#0d1720);border:2px solid rgba(155,29,29,0.12)}
+
+    .status{display:flex;gap:12px;align-items:center;color:var(--muted);font-size:14px;margin:12px 0}
+    .modal{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.6);opacity:0;pointer-events:none;transition:.2s}
+    .modal.open{opacity:1;pointer-events:auto}
+    .modal .card{background:#071020;padding:20px;max-width:420px;border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,0.6)}
+
+    @media (max-width:640px){.board{grid-template-columns:repeat(3,1fr)}.face{font-size:28px}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Jogo da Memória — Match Uchiha</h1>
+      <div class="controls">
+        <button class="btn" id="reset">Reiniciar</button>
+        <button class="btn primary" id="newGame">Novo Jogo</button>
+      </div>
+    </header>
+
+    <div class="status">
+      <div>Tempo: <strong id="timer">0s</strong></div>
+      <div>Jogadas: <strong id="moves">0</strong></div>
+      <div>Casais restantes: <strong id="remaining">8</strong></div>
+    </div>
+
+    <main>
+      <div class="board" id="board" aria-live="polite"></div>
+    </main>
+  </div>
+
+  <div class="modal" id="modal" role="dialog" aria-modal="true">
+    <div class="card">
+      <h2 id="modalTitle">Você venceu! 🏆</h2>
+      <p id="modalText">Parabéns — você completou o jogo.</p>
+      <div style="display:flex;gap:8px;margin-top:12px;justify-content:flex-end">
+        <button class="btn" id="closeModal">Fechar</button>
+        <button class="btn primary" id="playAgain">Jogar Novamente</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Emoticons / símbolos usados como cartas (pode substituir por URLs de imagens)
+    const symbols = ['🖤','🔥','⚡','🌪️','🔗','🕯️','🔺','🌑']; // 8 pares -> 16 cartas
+
+    const board = document.getElementById('board');
+    const movesEl = document.getElementById('moves');
+    const timerEl = document.getElementById('timer');
+    const remainingEl = document.getElementById('remaining');
+    const modal = document.getElementById('modal');
+    const modalTitle = document.getElementById('modalTitle');
+    const modalText = document.getElementById('modalText');
+
+    let deck = [];
+    let first = null, second = null;
+    let lock = false;
+    let moves = 0;
+    let matches = 0;
+    let timer = null;
+    let seconds = 0;
+
+    function createDeck(){
+      deck = [...symbols, ...symbols];
+      shuffle(deck);
+    }
+
+    function shuffle(array){
+      for(let i=array.length-1;i>0;i--){
+        const j=Math.floor(Math.random()*(i+1));
+        [array[i],array[j]]=[array[j],array[i]];
+      }
+    }
+
+    function renderBoard(){
+      board.innerHTML = '';
+      deck.forEach((sym, idx)=>{
+        const card = document.createElement('div'); card.className='card'; card.dataset.index=idx;
+        const inner = document.createElement('div'); inner.className='inner';
+        inner.innerHTML = `\n          <div class="face front"></div>\n          <div class="face back">${sym}</div>\n        `;
+        card.appendChild(inner);
+        card.addEventListener('click', ()=>onCardClick(card, sym));
+        board.appendChild(card);
+      });
+      updateStatus();
+    }
+
+    function onCardClick(card, sym){
+      if(lock) return;
+      if(card.classList.contains('flipped')) return;
+      // start timer on first click
+      if(moves===0 && matches===0 && seconds===0) startTimer();
+
+      card.classList.add('flipped');
+      if(!first){ first = {card, sym}; return }
+      second = {card, sym};
+      lock = true;
+      moves++;
+      movesEl.textContent = moves;
+
+      if(first.sym === second.sym){
+        // match
+        matches++;
+        first.card.style.pointerEvents='none';
+        second.card.style.pointerEvents='none';
+        resetPair();
+        if(matches === symbols.length) onWin();
+      } else {
+        // no match
+        setTimeout(()=>{
+          first.card.classList.remove('flipped');
+          second.card.classList.remove('flipped');
+          resetPair();
+        }, 800);
+      }
+      updateStatus();
+    }
+
+    function resetPair(){ first = null; second = null; lock=false }
+
+    function updateStatus(){
+      remainingEl.textContent = symbols.length - matches;
+    }
+
+    function startTimer(){
+      if(timer) clearInterval(timer);
+      timer = setInterval(()=>{ seconds++; timerEl.textContent = seconds + 's' },1000);
+    }
+
+    function stopTimer(){ if(timer) clearInterval(timer); timer=null }
+
+    function onWin(){
+      stopTimer();
+      modalTitle.textContent = 'Você venceu! 🏆';
+      modalText.textContent = `Tempo: ${seconds}s • Jogadas: ${moves}`;
+      modal.classList.add('open');
+    }
+
+    function resetGame(){
+      stopTimer(); seconds=0; timerEl.textContent='0s'; moves=0; movesEl.textContent='0'; matches=0; first=second=null; lock=false;
+      createDeck(); shuffle(deck); renderBoard();
+    }
+
+    // Buttons
+    document.getElementById('reset').addEventListener('click', ()=>{
+      // flip back all cards
+      document.querySelectorAll('.card.flipped').forEach(c=>c.classList.remove('flipped'));
+      moves=0; movesEl.textContent='0'; seconds=0; timerEl.textContent='0s'; stopTimer(); matches=0; updateStatus();
+    });
+
+    document.getElementById('newGame').addEventListener('click', ()=> resetGame());
+    document.getElementById('closeModal').addEventListener('click', ()=> modal.classList.remove('open'));
+    document.getElementById('playAgain').addEventListener('click', ()=>{ modal.classList.remove('open'); resetGame(); });
+
+    // Inicializa
+    resetGame();
+  </script>
+</body>
+</html>
